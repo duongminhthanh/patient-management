@@ -14,6 +14,7 @@ spring:
                 - Path=/auth/**
               filters:
                 - StripPrefix=1
+                - JwtValidation
 
             # Route for /api/patients/** to patient-service
             - id: patient-service-route
