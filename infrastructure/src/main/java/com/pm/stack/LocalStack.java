@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import software.amazon.awscdk.App;
 import software.amazon.awscdk.AppProps;
 import software.amazon.awscdk.BootstraplessSynthesizer;
@@ -102,6 +104,8 @@ public class LocalStack extends Stack {
         patientService.getNode().addDependency(patientDbHealthCheck);
         patientService.getNode().addDependency(billingService);
         patientService.getNode().addDependency(mskCluster);
+
+        createApiGatewayService();
 
     }
 
@@ -232,6 +236,50 @@ public class LocalStack extends Stack {
                 .serviceName(imageName)
                 .build();
     }
+    // create load balance app gateway
+    private void createApiGatewayService() {
+        FargateTaskDefinition taskDefinition =
+                FargateTaskDefinition.Builder.create(this, "APIGatewayTaskDefinition")
+                        .cpu(256)
+                        .memoryLimitMiB(512)
+                        .build();
+
+        ContainerDefinitionOptions containerOptions =
+                ContainerDefinitionOptions.builder()
+                        .image(ContainerImage.fromRegistry("api-gateway"))
+                        .environment(Map.of(
+                                "SPRING_PROFILES_ACTIVE", "prod",
+                                "AUTH_SERVICE_URL", "http://host.docker.internal:4005"
+                        ))
+                        .portMappings(Stream.of(4004)
+                                .map(port -> PortMapping.builder()
+                                        .containerPort(port)
+                                        .hostPort(port)
+                                        .protocol(Protocol.TCP)
+                                        .build())
+                                .toList())
+                        .logging(LogDriver.awsLogs(AwsLogDriverProps.builder()
+                                .logGroup(LogGroup.Builder.create(this, "ApiGatewayLogGroup")
+                                        .logGroupName("/ecs/api-gateway")
+                                        .removalPolicy(RemovalPolicy.DESTROY)
+                                        .retention(RetentionDays.ONE_DAY)
+                                        .build())
+                                .streamPrefix("api-gateway")
+                                .build()))
+                        .build();
+
+
+        taskDefinition.addContainer("APIGatewayContainer", containerOptions);
+
+        ApplicationLoadBalancedFargateService.Builder.create(this, "APIGatewayService")
+                .cluster(ecsCluster)
+                .serviceName("api-gateway")
+                .taskDefinition(taskDefinition)
+                .desiredCount(1)
+                .healthCheckGracePeriod(Duration.seconds(60))
+                .build();
+    }
+
     public static void main(final String[] args) {
         App app = new App(AppProps.builder().outdir("./cdk.out").build());
 
